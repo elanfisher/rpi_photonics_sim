@@ -42,22 +42,23 @@
   #mini.hidden { display: none; }
   #mini:active { cursor: grabbing; }
   .sidebar {
-    width: 132px; flex: 0 0 132px;
+    width: 158px; flex: 0 0 158px;
     background: #14141e; border-left: 1px solid var(--line);
-    padding: 8px 8px 6px; font-size: 11px;
+    padding: 8px 7px 6px; font-size: 11px; overflow: hidden;
   }
   .row {
     padding: 3px 4px; border-radius: 3px; cursor: pointer;
-    display: flex; align-items: baseline; gap: 5px;
+    display: flex; align-items: center; gap: 5px;
   }
   .row.sel { background: #2f3d52; }
-  .row .v { flex: 1; }
-  .row .pm { opacity: 0; display: flex; gap: 2px; }
-  .row:hover .pm, .row.sel .pm { opacity: 1; }
+  .row .k { flex: 0 0 auto; }
+  .row .v { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .pm { flex: 0 0 auto; display: flex; gap: 2px; }
   .row .pm b {
-    display: inline-block; width: 15px; text-align: center;
+    display: block; width: 16px; height: 16px; text-align: center;
     background: #333; border: 1px solid var(--line); border-radius: 3px;
-    color: var(--ink); font-weight: 400; cursor: pointer; line-height: 15px;
+    color: var(--ink); font-weight: 400; cursor: pointer; line-height: 14px;
+    font-size: 12px;
   }
   .row .pm b:hover { background: #4a4a4a; }
   .row .k { color: var(--dim); }
@@ -79,6 +80,35 @@
   .hint { color: var(--dim); max-width: 640px; text-align: center; font-size: 12px; }
   .camlabel { color: var(--dim); align-self: center; font-size: 12px; margin-left: 6px; }
   button.cam { padding: 6px 9px; font-size: 11px; }
+
+  /* Mobile. The canvas keeps its 480x480 backing store and is scaled by CSS, so
+     the physics resolution never depends on the viewport. The sidebar moves
+     under the screen and its rows go two-up so the page does not get tall. */
+  @media (max-width: 700px) {
+    body { padding: 12px 10px 40px; }
+    .device { padding: 10px; border-radius: 10px; width: 100%; }
+    .screen { flex-direction: column; }
+    .stage { width: 100%; }
+    canvas#sim { width: 100%; height: auto; }
+    #mini { width: 42vw; max-width: 172px; height: auto; aspect-ratio: 344 / 276; }
+    .sidebar {
+      width: 100%; flex: 1 1 auto; border-left: none;
+      border-top: 1px solid var(--line);
+      padding: 8px; font-size: 12px;
+    }
+    /* The grid belongs on the row container, not the sidebar, or the single
+       #menu div is the only grid item and everything stays one column. */
+    #menu { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; }
+    .row { padding: 6px 4px; }
+    .row .pm b { width: 22px; height: 22px; line-height: 20px; font-size: 14px; }
+    .viewname { grid-column: 1 / -1; }
+    .controls { gap: 6px; }
+    .controls button { flex: 1 1 auto; min-width: 64px; padding: 9px 8px; }
+    button.cam { flex: 1 1 22%; }
+    .camlabel { flex-basis: 100%; margin: 4px 0 0; }
+    .stat { flex-basis: 100%; }
+    .hint { font-size: 12px; }
+  }
   .hint kbd {
     background: #333; border: 1px solid var(--line); border-radius: 3px;
     padding: 1px 5px; font: inherit; font-size: 11px;
@@ -427,21 +457,17 @@ const mini = document.getElementById("mini");
 const mctx = mini.getContext("2d");
 const MW = mini.width, MH = mini.height;
 const M = 44;               // minimap grid, independent of the physics grid
-// pitch is the angle off vertical. 0 looks straight down into the dish, +PI/2 is
-// edge on from above the rim, negative swings under the surface to see the back
-// of it. The camera orbits freely rather than sitting on one side of the horizon.
-let yaw = -0.6, pitch = 0.45, spin = true;
-const PITCH_MIN = -1.45, PITCH_MAX = 1.45;
+// The camera orbits freely above and below the horizon.
+// el is elevation ABOVE THE HORIZON. 0 is edge on, +PI/2 is directly overhead
+// looking down into the dish, negative goes under the surface.
+let yaw = -0.6, el = 0.95, spin = true;
+const EL_MIN = -1.45, EL_MAX = 1.53;
 
-// A bowl of depth DEPTH across a unit-wide patch hides its own interior once the
-// near rim rises above the centre on screen, which happens at
-// tan(pitch) > 1/(2*DEPTH). At DEPTH 0.42 that is 0.87 rad, so anything steeper
-// than that is looking at the outside of the rim. The presets below bracket it.
 const CAM_PRESETS = {
-  top:   [-0.6, 0.06],
-  into:  [-0.6, 0.45],
-  side:  [-0.6, 1.25],
-  under: [-0.6, -0.75],
+  top:   [-0.6, 1.45],
+  into:  [-0.6, 0.95],
+  side:  [-0.6, 0.18],
+  under: [-0.6, -0.55],
 };
 
 function draw3D() {
@@ -464,9 +490,17 @@ function draw3D() {
     }
   }
 
+  // Camera sits at elevation `el` above the horizon, at (0, -cos el, +sin el),
+  // looking at the origin. Basis:
+  //   right = (1, 0, 0)
+  //   up    = (0, sin el, cos el)
+  //   away  = (0, cos el, -sin el)
+  // The previous version rotated the world instead and left `away` pointing along
+  // +z, which made high points sort as FAR. The pit then painted over the rim and
+  // the whole surface rendered as if seen from underneath.
   const cy = Math.cos(yaw), sy_ = Math.sin(yaw);
-  const cp = Math.cos(pitch), sp = Math.sin(pitch);
-  const DEPTH = 0.42, SCALE = MW * 0.62, CX = MW/2, CY = MH*0.56;
+  const se = Math.sin(el), ce = Math.cos(el);
+  const DEPTH = 0.42, SCALE = MW * 0.62, CX = MW/2, CY = MH*0.52;
 
   const px = new Float64Array(M*M), py = new Float64Array(M*M), pz = new Float64Array(M*M);
   for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) {
@@ -474,12 +508,12 @@ function draw3D() {
     const wx = i/(M-1) - 0.5, wy = j/(M-1) - 0.5, wz = z[k]*DEPTH;
     const rx = wx*cy - wy*sy_;
     const ry = wx*sy_ + wy*cy;
-    const vy = ry*cp - wz*sp;
-    const vz = ry*sp + wz*cp;
-    const persp = 1 / (1 + vz*0.35);
+    const up   = ry*se + wz*ce;
+    const away = ry*ce - wz*se;
+    const persp = 1 / (1 + away*0.35);
     px[k] = CX + rx*SCALE*persp;
-    py[k] = CY + vy*SCALE*persp;
-    pz[k] = vz;
+    py[k] = CY - up*SCALE*persp;      // screen y grows downward
+    pz[k] = away;
   }
 
   const quads = [];
@@ -544,20 +578,39 @@ function spinLoop(t) {
 
 let miniDrag = null;
 mini.addEventListener("mousedown", e => {
-  miniDrag = { x: e.clientX, y: e.clientY, yaw, pitch }; spin = false; e.stopPropagation();
+  miniDrag = { x: e.clientX, y: e.clientY, yaw, el }; spin = false; e.stopPropagation();
 });
 window.addEventListener("mousemove", e => {
   if (!miniDrag) return;
   yaw = miniDrag.yaw + (e.clientX - miniDrag.x) * 0.01;
-  pitch = Math.min(PITCH_MAX, Math.max(PITCH_MIN, miniDrag.pitch + (e.clientY - miniDrag.y) * 0.008));
+  // Grab-the-object feel rather than move-the-camera. Pulling down tips the near
+  // rim toward you and opens up the top, which is what the gesture looks like it
+  // should do.
+  el = Math.min(EL_MAX, Math.max(EL_MIN, miniDrag.el + (e.clientY - miniDrag.y) * 0.008));
 });
 window.addEventListener("mouseup", () => { miniDrag = null; });
 mini.addEventListener("dblclick", () => { spin = !spin; });
 
+// Touch. The minimap sits on top of the sim canvas, so these must stop
+// propagation or dragging the mirror also drags the beam underneath it.
+mini.addEventListener("touchstart", e => {
+  e.preventDefault(); e.stopPropagation();
+  const t = e.touches[0];
+  miniDrag = { x: t.clientX, y: t.clientY, yaw, el }; spin = false;
+}, { passive: false });
+mini.addEventListener("touchmove", e => {
+  if (!miniDrag) return;
+  e.preventDefault(); e.stopPropagation();
+  const t = e.touches[0];
+  yaw = miniDrag.yaw + (t.clientX - miniDrag.x) * 0.012;
+  el = Math.min(EL_MAX, Math.max(EL_MIN, miniDrag.el + (t.clientY - miniDrag.y) * 0.01));
+}, { passive: false });
+mini.addEventListener("touchend", e => { e.stopPropagation(); miniDrag = null; });
+
 document.querySelectorAll("button.cam").forEach(b => {
   b.onclick = () => {
-    const [y, p] = CAM_PRESETS[b.dataset.c];
-    yaw = y; pitch = p; spin = false;
+    const [y, e2] = CAM_PRESETS[b.dataset.c];
+    yaw = y; el = e2; spin = false;
     if (!params.show3d) { params.show3d = true; syncMini(); drawMenu(); }
     draw3D();
   };
