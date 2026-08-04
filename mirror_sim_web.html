@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mirror Simulator</title>
+<style>
+  :root {
+    --bg: #14141c;
+    --case: #2b2b2b;
+    --panel: #1e1e28;
+    --line: #3a3a48;
+    --ink: #e8e8ef;
+    --dim: #9aa0b0;
+    --accent: #7fd4ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--bg); color: var(--ink);
+    font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    display: flex; flex-direction: column; align-items: center; gap: 18px;
+  }
+  .device {
+    background: var(--case);
+    border-radius: 14px;
+    padding: 16px;
+    box-shadow: 0 20px 50px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);
+    max-width: 100%;
+  }
+  .screen { display: flex; background: #000; border-radius: 4px; overflow: hidden; }
+  canvas { display: block; image-rendering: pixelated; background: #000; }
+  .sidebar {
+    width: 132px; flex: 0 0 132px;
+    background: #14141e; border-left: 1px solid var(--line);
+    padding: 8px 8px 6px; font-size: 11px;
+  }
+  .row { padding: 3px 4px; border-radius: 3px; cursor: pointer; }
+  .row.sel { background: #2f3d52; }
+  .row .k { color: var(--dim); }
+  .row .v { color: var(--accent); }
+  .viewname {
+    display: flex; justify-content: space-between;
+    padding: 8px 4px 0; margin-top: 6px;
+    border-top: 1px solid var(--line); color: var(--dim);
+  }
+  .viewname b { color: var(--ink); font-weight: 600; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  button {
+    background: #333; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 5px; padding: 6px 11px; font: inherit; font-size: 12px;
+    cursor: pointer;
+  }
+  button:hover { background: #3d3d3d; }
+  button:active { background: #4a4a4a; }
+  .hint { color: var(--dim); max-width: 640px; text-align: center; font-size: 12px; }
+  .hint kbd {
+    background: #333; border: 1px solid var(--line); border-radius: 3px;
+    padding: 1px 5px; font: inherit; font-size: 11px;
+  }
+  .stat { color: var(--dim); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div class="device">
+  <div class="screen">
+    <canvas id="sim" width="480" height="480"></canvas>
+    <div class="sidebar">
+      <div id="menu"></div>
+      <div class="viewname">
+        <span id="viewname">Interference</span>
+        <b id="viewnum">3/6</b>
+      </div>
+    </div>
+  </div>
+  <div class="controls">
+    <button id="prevview">&larr; view</button>
+    <button id="nextview">view &rarr;</button>
+    <button id="reset">reset</button>
+    <span class="stat" id="stat"></span>
+  </div>
+</div>
+
+<p class="hint">
+  Drag on the screen to move the beam, the way the left joystick does on the device.
+  <kbd>&larr;</kbd><kbd>&rarr;</kbd> cycles views, <kbd>&uarr;</kbd><kbd>&darr;</kbd> picks a menu row,
+  <kbd>,</kbd><kbd>.</kbd> changes its value.
+</p>
+
+<script>
+// ---------------------------------------------------------------- constants
+// Ported from mirror_physics.py. Same symbols, same values.
+const WAVELENGTH = 1.0e-6;
+const K = 2 * Math.PI / WAVELENGTH;
+const W0 = 1.0e-3;
+const ZR = Math.PI * W0 * W0 / WAVELENGTH;
+const L = 6e-3;
+
+const ROUGHNESS_OPTIONS = [0, 1/64, 1/32, 1/16, 1/8, 1/4, 1/2];
+const ROUGHNESS_LABELS  = ["0", "λ/64", "λ/32", "λ/16", "λ/8", "λ/4", "λ/2"];
+const MIRROR_MODES = ["both", "quadratic", "rough", "bump"];
+const QP_MODES = ["statistical", "empirical"];
+const FIDELITY_LEVELS = [["Low",16,4],["Med",32,6],["High",64,12],["Max",128,24]];
+
+const VIEW_NAMES = ["Roughness","Surface","Interference","Phase","Amplitude","Q_p Matrix"];
+
+const params = {
+  z_m: 0.15, R_m: 0.5, roughness_idx: 3, corr_len: 150e-6,
+  beam_x: 0.5e-3, beam_y: 0.3e-3,
+  mirror_mode: "quadratic", qp_mode: "statistical",
+  markers: true, fidelity: 2,
+};
+const DEFAULTS = JSON.parse(JSON.stringify(params));
+
+let view = 2, selected = 0;
+
+// ---------------------------------------------------------------- colormaps
+// Byte for byte the ramps in mirror_sim_pi.py generate_colormap().
+function buildCmaps() {
+  const out = {};
+  const mk = f => { const a = new Uint8Array(768);
+    for (let i=0;i<256;i++){ const c=f(i/255); a[i*3]=Math.min(255,Math.max(0,c[0]|0));
+      a[i*3+1]=Math.min(255,Math.max(0,c[1]|0)); a[i*3+2]=Math.min(255,Math.max(0,c[2]|0)); }
+    return a; };
+  out.viridis = mk(t => [68+t*120, 1+t*180, 84+t*100]);
+  out.inferno = mk(t => {
+    if (t<0.25) return [t*4*80, t*4*10, t*4*60];
+    if (t<0.5)  { const u=(t-0.25)*4; return [80+u*175, 10+u*30, 60-u*60]; }
+    if (t<0.75) { const u=(t-0.5)*4;  return [255, 40+u*140, 0]; }
+    const u=(t-0.75)*4; return [255, 180+u*75, u*120];
+  });
+  // Cyclic on purpose. A wrapped phase display needs t=0 and t=1 to be the
+  // same colour or it shows a false seam at plus or minus pi.
+  out.twilight = mk(t => { const a = t*2*Math.PI; return [
+    127+127*Math.sin(a), 127+127*Math.sin(a+2*Math.PI/3), 127+127*Math.sin(a+4*Math.PI/3)]; });
+  out.hot = mk(t => [t*3*255, (t-0.33)*3*255, (t-0.66)*3*255]);
+  return out;
+}
+const CMAPS = buildCmaps();
+
+// ---------------------------------------------------------------- fft
+// Iterative radix-2 Cooley-Tukey, in place, with the bit-reversal permutation
+// done up front. Verified against numpy.fft to 4e-15.
+function fft1d(re, im, inverse) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { let t=re[i]; re[i]=re[j]; re[j]=t; t=im[i]; im[i]=im[j]; im[j]=t; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = 2*Math.PI/len * (inverse ? 1 : -1);
+    const wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let j = 0; j < len/2; j++) {
+        const a = i+j, b = i+j+len/2;
+        const vr = re[b]*cr - im[b]*ci;
+        const vi = re[b]*ci + im[b]*cr;
+        re[b] = re[a]-vr; im[b] = im[a]-vi;
+        re[a] += vr;      im[a] += vi;
+        const ncr = cr*wr - ci*wi; ci = cr*wi + ci*wr; cr = ncr;
+      }
+    }
+  }
+  if (inverse) for (let i=0;i<n;i++){ re[i]/=n; im[i]/=n; }
+}
+
+function fft2d(re, im, N, inverse) {
+  const rr = new Float64Array(N), ri = new Float64Array(N);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) { rr[x]=re[y*N+x]; ri[x]=im[y*N+x]; }
+    fft1d(rr, ri, inverse);
+    for (let x = 0; x < N; x++) { re[y*N+x]=rr[x]; im[y*N+x]=ri[x]; }
+  }
+  for (let x = 0; x < N; x++) {
+    for (let y = 0; y < N; y++) { rr[y]=re[y*N+x]; ri[y]=im[y*N+x]; }
+    fft1d(rr, ri, inverse);
+    for (let y = 0; y < N; y++) { re[y*N+x]=rr[y]; im[y*N+x]=ri[y]; }
+  }
+}
+
+// ---------------------------------------------------------------- grids
+// np.random.seed(42) is not reproducible outside numpy, so this is a seeded
+// mulberry32 through Box-Muller. Same statistics, different draw.
+function rng(seed) {
+  return function() {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+const gridCache = {};
+function grids(N) {
+  if (gridCache[N]) return gridCache[N];
+  const dx = L / N;
+  const x = new Float64Array(N), f = new Float64Array(N);
+  for (let i = 0; i < N; i++) x[i] = -L/2 + L*i/(N-1);
+  for (let i = 0; i < N; i++) f[i] = (i < N/2 ? i : i - N) / (N*dx);
+  const noise = new Float64Array(N*N);
+  const r = rng(42);
+  for (let i = 0; i < N*N; i += 2) {
+    const u1 = Math.max(r(), 1e-12), u2 = r();
+    const m = Math.sqrt(-2*Math.log(u1));
+    noise[i] = m*Math.cos(2*Math.PI*u2);
+    if (i+1 < N*N) noise[i+1] = m*Math.sin(2*Math.PI*u2);
+  }
+  return (gridCache[N] = { N, x, f, noise });
+}
+
+// ---------------------------------------------------------------- physics
+const state = { rough:null, h:null, I:null, A:null, phi:null, Qp:null, refx:0, refy:0, N:0 };
+
+function computeInterference() {
+  const N = FIDELITY_LEVELS[params.fidelity][1];
+  const g = grids(N);
+  const { x, f, noise } = g;
+  state.N = N;
+
+  const z = params.z_m, Rm = params.R_m;
+  const sigma_h = ROUGHNESS_OPTIONS[params.roughness_idx] * WAVELENGTH;
+  const cl = params.corr_len;
+
+  const wz = W0 * Math.sqrt(1 + (z/ZR)**2);
+  const Rz = z !== 0 ? z * (1 + (ZR/z)**2) : Infinity;
+  const gouy = z !== 0 ? Math.atan(z/ZR) : 0;
+
+  // Correlated roughness: filter white noise with a Gaussian in frequency,
+  // then renormalise to the requested RMS height.
+  const re = new Float64Array(N*N), im = new Float64Array(N*N);
+  re.set(noise);
+  fft2d(re, im, N, false);
+  for (let iy = 0; iy < N; iy++) for (let ix = 0; ix < N; ix++) {
+    const H = Math.exp(-(f[ix]*f[ix] + f[iy]*f[iy]) * (2*Math.PI*cl)**2);
+    re[iy*N+ix] *= H; im[iy*N+ix] *= H;
+  }
+  fft2d(re, im, N, true);
+
+  let mean = 0; for (let i=0;i<N*N;i++) mean += re[i]; mean /= N*N;
+  let vr = 0; for (let i=0;i<N*N;i++) vr += (re[i]-mean)**2;
+  const sd = Math.sqrt(vr/(N*N));
+  const rough = new Float64Array(N*N);
+  if (sd > 0) for (let i=0;i<N*N;i++) rough[i] = re[i] * sigma_h / sd;
+
+  const h = new Float64Array(N*N);
+  const roughDisp = new Float64Array(N*N);
+  const I = new Float64Array(N*N), A = new Float64Array(N*N), phi = new Float64Array(N*N);
+  const mode = params.mirror_mode;
+  const bumpW = L/4;
+
+  let Imax = 0;
+  for (let iy = 0; iy < N; iy++) {
+    const Y = x[iy], Ys = Y - params.beam_y;
+    for (let ix = 0; ix < N; ix++) {
+      const X = x[ix], Xs = X - params.beam_x, k = iy*N+ix;
+      const r2 = Xs*Xs + Ys*Ys;
+
+      let hq = 0;
+      if (isFinite(Rm) && Rm !== 0) {
+        if (mode === "bump") { if (Math.abs(Y) < bumpW) hq = (X*X)/(2*Rm); }
+        else hq = (X*X + Y*Y)/(2*Rm);
+      }
+
+      let hv, rd;
+      if (mode === "quadratic") { hv = hq; rd = 0; }
+      else if (mode === "rough") { hv = rough[k]; rd = rough[k]; }
+      else if (mode === "bump")  { hv = hq; rd = 0; }
+      else { hv = hq + rough[k]; rd = rough[k]; }
+      h[k] = hv; roughDisp[k] = rd;
+
+      const a = Math.exp(-r2/(wz*wz));
+      A[k] = a;
+      const pinc = isFinite(Rz) ? (K/(2*Rz))*r2 - gouy : -gouy;
+      const pref = -pinc + 2*K*hv;
+      phi[k] = Math.atan2(Math.sin(pref), Math.cos(pref));
+
+      const sre = a*(Math.cos(pinc) + Math.cos(pref));
+      const sim = a*(Math.sin(pinc) + Math.sin(pref));
+      const v = sre*sre + sim*sim;
+      I[k] = v; if (v > Imax) Imax = v;
+    }
+  }
+  if (Imax > 0) for (let i=0;i<N*N;i++) I[i] /= Imax;
+
+  state.rough = roughDisp; state.h = h; state.I = I; state.A = A; state.phi = phi;
+
+  if (mode !== "rough" && isFinite(Rm) && Rm !== 0) {
+    state.refx = params.beam_x * (1 - 2*params.z_m/Rm);
+    state.refy = params.beam_y * (1 - 2*params.z_m/Rm);
+  } else { state.refx = params.beam_x; state.refy = params.beam_y; }
+}
+
+// O(n^4). On the device this is throttled to 2 Hz and only while its own view
+// is showing. Here it is computed only when view 5 is selected.
+function computeQp() {
+  const gs = FIDELITY_LEVELS[params.fidelity][2];
+  const N = state.N;
+  const Lsmall = L * (gs / 240.0);
+  const c = new Float64Array(gs);
+  for (let i = 0; i < gs; i++) c[i] = -Lsmall/2 + Lsmall*i/(gs-1);
+  const n = gs*gs;
+  const px = new Float64Array(n), py = new Float64Array(n);
+  for (let iy = 0, k = 0; iy < gs; iy++) for (let ix = 0; ix < gs; ix++, k++) { px[k]=c[ix]; py[k]=c[iy]; }
+  const Qp = new Float64Array(n*n);
+
+  if (params.qp_mode === "empirical" && state.h) {
+    const ps = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const fx = Math.min(N-1, Math.max(0, Math.floor((px[i]/L + 0.5)*N)));
+      const fy = Math.min(N-1, Math.max(0, Math.floor((py[i]/L + 0.5)*N)));
+      ps[i] = 2*K*state.h[fy*N+fx];
+    }
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++)
+      Qp[i*n+j] = (Math.cos(ps[i]-ps[j]) + 1)/2;
+  } else {
+    const cl2 = params.corr_len*params.corr_len;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      const dx = px[i]-px[j], dy = py[i]-py[j];
+      Qp[i*n+j] = Math.exp(-(dx*dx + dy*dy)/cl2);
+    }
+  }
+  state.Qp = Qp; state.QpN = n;
+}
+
+// ---------------------------------------------------------------- render
+const cv = document.getElementById("sim");
+const ctx = cv.getContext("2d");
+const SIZE = 480;
+const imgData = ctx.createImageData(SIZE, SIZE);
+
+function viewData() {
+  switch (view) {
+    case 0: return { d: state.rough, n: state.N, cm: CMAPS.viridis, scale: "auto", matrix: false };
+    case 1: return { d: state.h,     n: state.N, cm: CMAPS.viridis, scale: "auto", matrix: false };
+    case 2: return { d: state.I,     n: state.N, cm: CMAPS.inferno, scale: "raw",  matrix: false };
+    case 3: return { d: state.phi,   n: state.N, cm: CMAPS.twilight, scale: "phase", matrix: false };
+    case 4: return { d: state.A,     n: state.N, cm: CMAPS.hot,     scale: "auto", matrix: false };
+    case 5: return { d: state.Qp,    n: state.QpN, cm: CMAPS.viridis, scale: "raw", matrix: true };
+  }
+}
+
+function render() {
+  const v = viewData();
+  if (!v.d) return;
+  const { d, n, cm, scale, matrix } = v;
+
+  let lo = 0, hi = 1;
+  if (scale === "auto") {
+    lo = Infinity; hi = -Infinity;
+    for (let i = 0; i < n*n; i++) { if (d[i] < lo) lo = d[i]; if (d[i] > hi) hi = d[i]; }
+    if (hi - lo < 1e-30) { lo = 0; hi = 1; }
+  }
+
+  const px = imgData.data;
+  for (let sy = 0; sy < SIZE; sy++) {
+    // Field views draw with +y up. The matrix view keeps row 0 at the top,
+    // because matrix coordinates are not spatial.
+    const gy = matrix ? Math.floor(sy*n/SIZE) : (n - 1 - Math.floor(sy*n/SIZE));
+    for (let sx = 0; sx < SIZE; sx++) {
+      const gx = Math.floor(sx*n/SIZE);
+      const val = d[gy*n + gx];
+      let t;
+      if (scale === "phase") t = (val + Math.PI) / (2*Math.PI);
+      else if (scale === "auto") t = (val - lo) / (hi - lo);
+      else t = val;
+      let idx = (t*255) | 0; if (idx < 0) idx = 0; else if (idx > 255) idx = 255;
+      const o = (sy*SIZE + sx)*4, c = idx*3;
+      px[o] = cm[c]; px[o+1] = cm[c+1]; px[o+2] = cm[c+2]; px[o+3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  if (params.markers && !matrix) {
+    const mk = (mx, my, col) => {
+      const cx = (mx/L + 0.5)*SIZE, cy = (1 - (my/L + 0.5))*SIZE;
+      ctx.beginPath(); ctx.arc(cx, cy, 7, 0, 2*Math.PI);
+      ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+    };
+    mk(params.beam_x, params.beam_y, "#ff4444");
+    mk(state.refx, state.refy, "#44ddff");
+  }
+}
+
+// ---------------------------------------------------------------- menu
+const MENU = [
+  { label: "Fidelity", get: () => FIDELITY_LEVELS[params.fidelity][0],
+    adj: d => { params.fidelity = Math.min(FIDELITY_LEVELS.length-1, Math.max(0, params.fidelity+d)); } },
+  { label: "Mirror", get: () => params.mirror_mode,
+    adj: d => { let i = MIRROR_MODES.indexOf(params.mirror_mode);
+                params.mirror_mode = MIRROR_MODES[(i+d+MIRROR_MODES.length)%MIRROR_MODES.length]; } },
+  { label: "Q_p", get: () => params.qp_mode === "statistical" ? "stat" : "emp",
+    adj: d => { let i = QP_MODES.indexOf(params.qp_mode);
+                params.qp_mode = QP_MODES[(i+d+QP_MODES.length)%QP_MODES.length]; } },
+  { label: "Rough", get: () => ROUGHNESS_LABELS[params.roughness_idx],
+    adj: d => { params.roughness_idx = (params.roughness_idx+d+ROUGHNESS_OPTIONS.length)%ROUGHNESS_OPTIONS.length; } },
+  { label: "Z", get: () => params.z_m.toFixed(2) + "m",
+    adj: d => { params.z_m = Math.min(1.0, Math.max(0.05, +(params.z_m + d*0.05).toFixed(2))); } },
+  { label: "R", get: () => params.R_m.toFixed(1) + "m",
+    adj: d => { params.R_m = Math.min(2.0, Math.max(0.1, +(params.R_m + d*0.1).toFixed(1))); } },
+  { label: "Corr", get: () => (params.corr_len*1e6).toFixed(0) + "µm",
+    adj: d => { let u = params.corr_len*1e6 + d*10; params.corr_len = Math.min(500, Math.max(10, u))*1e-6; } },
+  { label: "Mark", get: () => params.markers ? "on" : "off",
+    adj: () => { params.markers = !params.markers; } },
+];
+
+function drawMenu() {
+  document.getElementById("menu").innerHTML = MENU.map((m, i) =>
+    `<div class="row${i===selected?" sel":""}" data-i="${i}">` +
+    `<span class="k">${m.label}</span> <span class="v">${m.get()}</span></div>`).join("");
+  document.getElementById("viewname").textContent = VIEW_NAMES[view];
+  document.getElementById("viewnum").textContent = (view+1) + "/6";
+  const N = FIDELITY_LEVELS[params.fidelity][1];
+  document.getElementById("stat").textContent =
+    `${N}×${N} grid · ${state.lastMs || 0} ms`;
+}
+
+// ---------------------------------------------------------------- loop
+let dirty = true;
+function recompute() {
+  const t0 = performance.now();
+  computeInterference();
+  if (view === 5) computeQp();
+  state.lastMs = Math.round(performance.now() - t0);
+  render(); drawMenu();
+}
+function tick() { if (dirty) { dirty = false; recompute(); } requestAnimationFrame(tick); }
+
+// ---------------------------------------------------------------- input
+let dragging = false;
+function beamFromEvent(e) {
+  const r = cv.getBoundingClientRect();
+  const cx = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+  const cy = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+  params.beam_x = (cx/r.width - 0.5) * L;
+  params.beam_y = (0.5 - cy/r.height) * L;
+  dirty = true;
+}
+cv.addEventListener("mousedown", e => { dragging = true; beamFromEvent(e); });
+window.addEventListener("mousemove", e => { if (dragging) beamFromEvent(e); });
+window.addEventListener("mouseup", () => { dragging = false; });
+cv.addEventListener("touchstart", e => { e.preventDefault(); dragging = true; beamFromEvent(e); }, {passive:false});
+cv.addEventListener("touchmove", e => { e.preventDefault(); if (dragging) beamFromEvent(e); }, {passive:false});
+cv.addEventListener("touchend", () => { dragging = false; });
+
+function cycleView(d) { view = (view + d + VIEW_NAMES.length) % VIEW_NAMES.length; dirty = true; }
+document.getElementById("nextview").onclick = () => cycleView(1);
+document.getElementById("prevview").onclick = () => cycleView(-1);
+document.getElementById("reset").onclick = () => { Object.assign(params, JSON.parse(JSON.stringify(DEFAULTS))); dirty = true; };
+document.getElementById("menu").addEventListener("click", e => {
+  const row = e.target.closest(".row"); if (!row) return;
+  selected = +row.dataset.i; dirty = true;
+});
+
+window.addEventListener("keydown", e => {
+  const k = e.key;
+  if (k === "ArrowRight") cycleView(1);
+  else if (k === "ArrowLeft") cycleView(-1);
+  else if (k === "ArrowDown") { selected = (selected+1)%MENU.length; dirty = true; }
+  else if (k === "ArrowUp") { selected = (selected-1+MENU.length)%MENU.length; dirty = true; }
+  else if (k === "." || k === ">") { MENU[selected].adj(1); dirty = true; }
+  else if (k === "," || k === "<") { MENU[selected].adj(-1); dirty = true; }
+  else return;
+  e.preventDefault();
+});
+
+recompute();
+tick();
+</script>
+</body>
+</html>
