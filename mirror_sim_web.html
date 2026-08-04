@@ -420,7 +420,11 @@ const mini = document.getElementById("mini");
 const mctx = mini.getContext("2d");
 const MW = mini.width, MH = mini.height;
 const M = 44;               // minimap grid, independent of the physics grid
-let yaw = -0.6, pitch = 1.02, spin = true;
+// pitch is the angle off vertical. 0 looks straight down into the dish, +PI/2 is
+// edge on from above the rim, negative swings under the surface to see the back
+// of it. The camera orbits freely rather than sitting on one side of the horizon.
+let yaw = -0.6, pitch = 0.78, spin = true;
+const PITCH_MIN = -1.45, PITCH_MAX = 1.45;
 
 function draw3D() {
   if (!params.show3d || !state.h) return;
@@ -525,7 +529,7 @@ mini.addEventListener("mousedown", e => {
 window.addEventListener("mousemove", e => {
   if (!miniDrag) return;
   yaw = miniDrag.yaw + (e.clientX - miniDrag.x) * 0.01;
-  pitch = Math.min(1.5, Math.max(0.15, miniDrag.pitch + (e.clientY - miniDrag.y) * 0.008));
+  pitch = Math.min(PITCH_MAX, Math.max(PITCH_MIN, miniDrag.pitch + (e.clientY - miniDrag.y) * 0.008));
 });
 window.addEventListener("mouseup", () => { miniDrag = null; });
 mini.addEventListener("dblclick", () => { spin = !spin; });
