@@ -42,7 +42,7 @@
   #mini.hidden { display: none; }
   #mini:active { cursor: grabbing; }
   .sidebar {
-    width: 158px; flex: 0 0 158px;
+    width: 182px; flex: 0 0 182px;
     background: #14141e; border-left: 1px solid var(--line);
     padding: 8px 7px 6px; font-size: 11px; overflow: hidden;
   }
@@ -52,7 +52,9 @@
   }
   .row.sel { background: #2f3d52; }
   .row .k { flex: 0 0 auto; }
-  .row .v { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Never ellipsize and never break mid-word. The value IS the information, so
+     the sidebar is sized to hold the longest one ("quadratic") instead. */
+  .row .v { flex: 1 1 auto; min-width: 0; white-space: nowrap; }
   .row .pm { flex: 0 0 auto; display: flex; gap: 2px; }
   .row .pm b {
     display: block; width: 16px; height: 16px; text-align: center;
@@ -97,9 +99,12 @@
       padding: 8px; font-size: 12px;
     }
     /* The grid belongs on the row container, not the sidebar, or the single
-       #menu div is the only grid item and everything stays one column. */
-    #menu { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; }
-    .row { padding: 6px 4px; }
+       #menu div is the only grid item and everything stays one column.
+       One column under 520px, because two columns of "Mirror quadratic" plus
+       two buttons does not fit a 375px phone without truncating the value. */
+    #menu { display: grid; grid-template-columns: 1fr; gap: 2px 8px; }
+    @media (min-width: 520px) { #menu { grid-template-columns: 1fr 1fr; } }
+    .row { padding: 6px 4px; align-items: center; }
     .row .pm b { width: 22px; height: 22px; line-height: 20px; font-size: 14px; }
     .viewname { grid-column: 1 / -1; }
     .controls { gap: 6px; }

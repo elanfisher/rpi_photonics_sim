@@ -23,8 +23,8 @@ correlation matrix is shown, beam markers on or off, and a fidelity setting.
 
 ## The physics
 
-A 1 µm Gaussian beam with a 1 mm waist over a 6 mm field of view, reflecting off
-a mirror that has both curvature and roughness. All of it is in
+A 1 µm Gaussian beam with a 1 mm waist over a 6 mm field of view. It reflects
+off a mirror that has both curvature and roughness. All of it is in
 `mirror_physics.py`, which is 250 lines and the only file you need to read to
 understand what the device computes.
 
@@ -45,9 +45,9 @@ The factor of 2 on `K*h` is there because the beam crosses each surface deviatio
 twice. Interference is `|E_inc + E_ref|²`.
 
 The mirror surface is fixed in the lab frame while the beam translates over it.
-`h_quad` uses unshifted coordinates and the beam uses shifted ones, which is why
-moving the beam off axis produces off-axis fringes rather than dragging the
-pattern along with it.
+`h_quad` uses unshifted coordinates and the beam uses shifted ones. Moving the
+beam off axis produces off-axis fringes rather than dragging the pattern along
+with it.
 
 ### The correlation matrix, both ways
 
