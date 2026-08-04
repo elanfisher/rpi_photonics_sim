@@ -1,0 +1,15 @@
+[Unit]
+Description=Coherence Emulator Web Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/rpi_photonics_sim
+ExecStart=/usr/bin/python3 /opt/rpi_photonics_sim/web_server.py --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=2
+User=root
+
+[Install]
+WantedBy=multi-user.target

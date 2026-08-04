@@ -1,0 +1,16 @@
+[Unit]
+Description=Mirror Simulation Display
+After=multi-user.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/rpi_photonics_sim
+ExecStart=/usr/bin/python3 /opt/rpi_photonics_sim/mirror_sim_pi.py --driver ili9341 --rotation 90 --width 240 --height 320 --serial-port /dev/ttyUSB0
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

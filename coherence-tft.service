@@ -1,0 +1,15 @@
+[Unit]
+Description=Coherence Emulator (TFT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/rpi_photonics_sim
+ExecStart=/usr/bin/python3 /opt/rpi_photonics_sim/tft_emulator.py --driver ili9341 --rotation 0 --cs CE1 --dc D24 --rst D25 --baudrate 8000000 --no-adc --serial-port /dev/ttyUSB0
+Restart=on-failure
+RestartSec=2
+User=root
+
+[Install]
+WantedBy=multi-user.target

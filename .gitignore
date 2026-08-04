@@ -1,0 +1,15 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Copyrighted third-party material. The Applied Optics author proof of
+# "Realization of nontrivial partial spatial coherence by a deformable mirror"
+# is Optica's, not mine, and its notice reserves all rights. It stays local.
+# The paper is at https://doi.org/10.1364/AO.557755
+*.pdf

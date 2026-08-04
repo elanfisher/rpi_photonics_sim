@@ -1,0 +1,15 @@
+[Unit]
+Description=Partial Coherence Emulator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/rpi_photonics_sim
+ExecStart=/usr/bin/python3 /opt/rpi_photonics_sim/coherence_emulator.py
+Restart=on-failure
+RestartSec=2
+User=root
+
+[Install]
+WantedBy=multi-user.target

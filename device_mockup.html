@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Coherence Emulator - EMF Edition</title>
+    <style>
+        body {
+            background: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: 'Courier New', monospace;
+            user-select: none; /* Prevent selection while dragging knobs */
+        }
+
+        .device-case {
+            width: 480px; 
+            height: 520px;
+            background: #2b2b2b;
+            border-radius: 20px;
+            box-shadow: 
+                -20px 20px 40px rgba(0,0,0,0.3),
+                inset 2px 2px 5px rgba(255,255,255,0.1);
+            position: relative;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* Screws */
+        .screw {
+            width: 10px;
+            height: 10px;
+            background: #555;
+            border-radius: 50%;
+            position: absolute;
+            box-shadow: inset 1px 1px 2px #000;
+        }
+        .tl { top: 15px; left: 15px; }
+        .tr { top: 15px; right: 15px; }
+        .bl { bottom: 15px; left: 15px; }
+        .br { bottom: 15px; right: 15px; }
+
+        /* LED Matrix Bezel */
+        .matrix-bezel {
+            width: 340px;
+            height: 340px;
+            background: #000;
+            border: 4px solid #444;
+            border-radius: 4px;
+            margin-top: 20px;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.8);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* The Simulation Canvas */
+        canvas {
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated;
+        }
+        
+        .grid-overlay {
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(#000 2px, transparent 2px),
+                linear-gradient(90deg, #000 2px, transparent 2px);
+            background-size: 10.6px 10.6px; /* Approx for 32px grid on 340px */
+            position: absolute;
+            top: 0; left: 0;
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        /* Control Panel */
+        .controls-area {
+            width: 100%;
+            height: 120px;
+            margin-top: 20px;
+            background: #333;
+            border-radius: 10px;
+            border: 1px solid #444;
+            display: flex;
+            justify-content: space-evenly; 
+            align-items: center;
+            box-shadow: inset 0 0 10px #000;
+            padding: 0 5px;
+        }
+
+        .knob-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+            width: 65px;
+        }
+
+        .knob {
+            width: 50px;
+            height: 50px;
+            background: radial-gradient(circle at 30% 30%, #666, #111);
+            border-radius: 50%;
+            border: 2px solid #000;
+            box-shadow: 0 5px 10px rgba(0,0,0,0.5);
+            position: relative;
+            cursor: ns-resize; /* Indicates drag vertical */
+            transform: rotate(-45deg); /* Default start */
+        }
+        
+        .knob::after {
+            content: '';
+            position: absolute;
+            top: 5px;
+            left: 50%;
+            width: 4px;
+            height: 20px;
+            background: #fff;
+            transform: translateX(-50%);
+            border-radius: 2px;
+        }
+
+        /* 3-Way Knob Specifics */
+        .knob.three-way {
+            cursor: pointer; 
+        }
+        
+        .label {
+            color: #aaa;
+            font-size: 9px; /* Slightly smaller text */
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: bold;
+            text-shadow: 0 1px 2px #000;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .toggle-switch {
+            width: 36px;
+            height: 50px; /* Slightly shorter */
+            background: #222;
+            border-radius: 4px;
+            position: relative;
+            border: 1px solid #555;
+            box-shadow: inset 0 0 5px #000;
+            cursor: pointer;
+        }
+
+        .switch-lever {
+            width: 100%;
+            height: 25px;
+            background: linear-gradient(to bottom, #888, #444);
+            position: absolute;
+            top: 0; /* Default Top */
+            border-radius: 2px;
+            box-shadow: 0 2px 4px #000;
+            border: 1px solid #666;
+            transition: top 0.15s ease-in-out;
+        }
+
+        .toggle-switch.active .switch-lever {
+            top: 25px; /* Bottom position */
+        }
+
+        .plaque {
+            position: absolute;
+            bottom: -60px;
+            background: #d4af37;
+            color: #423212;
+            padding: 10px 20px;
+            font-size: 12px;
+            border-radius: 4px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            text-align: center;
+            border: 1px solid #bba050;
+        }
+
+        .status-led {
+            width: 6px;
+            height: 6px;
+            background: #0f0;
+            border-radius: 50%;
+            box-shadow: 0 0 5px #0f0;
+            margin-bottom: 5px;
+            transition: background 0.2s;
+        }
+        
+        .status-led.off {
+            background: #333;
+            box-shadow: none;
+        }
+        
+        /* Rational mode LED color */
+        .status-led.rational {
+            background: #ffaa00;
+            box-shadow: 0 0 5px #ffaa00;
+        }
+        
+        /* View LED color */
+        .status-led.view-led {
+            background: #00ffff;
+            box-shadow: 0 0 5px #00ffff;
+        }
+        
+        /* Source LED color (EMF) */
+        .status-led.source-led {
+            background: #aa00ff; /* Purple for "Mystery/EMF" */
+            box-shadow: 0 0 5px #aa00ff;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="device-case">
+        <div class="screw tl"></div>
+        <div class="screw tr"></div>
+        <div class="screw bl"></div>
+        <div class="screw br"></div>
+
+        <div class="matrix-bezel">
+            <canvas id="simCanvas" width="32" height="32"></canvas>
+            <div class="grid-overlay"></div>
+        </div>
+
+        <div class="controls-area">
+            <!-- Coherence Knob -->
+            <div class="knob-group">
+                <div class="knob" id="knob-rho"></div>
+                <div class="label">ρ₀ (Size)</div>
+            </div>
+
+            <!-- Mode Switch -->
+            <div class="knob-group">
+                <div class="status-led" id="led-mode"></div>
+                <div class="toggle-switch" id="switch-mode">
+                    <div class="switch-lever"></div>
+                </div>
+                <div class="label">Gauss/Rat</div>
+            </div>
+            
+            <!-- Source Switch (EMF) -->
+            <div class="knob-group">
+                <div class="status-led source-led off" id="led-source"></div>
+                <div class="toggle-switch" id="switch-source">
+                    <div class="switch-lever"></div>
+                </div>
+                <div class="label">Auto/EMF</div>
+            </div>
+
+            <!-- View Selector Knob -->
+            <div class="knob-group">
+                <div class="status-led view-led" id="led-view"></div>
+                <div style="position: relative;">
+                    <div class="knob three-way" id="knob-view"></div>
+                </div>
+                <div class="label">Ker/Pha/Bm</div>
+            </div>
+
+            <!-- Speed Knob -->
+            <div class="knob-group">
+                <div class="knob" id="knob-speed"></div>
+                <div class="label">Speed</div>
+            </div>
+        </div>
+
+        <div class="plaque">
+            <b>PARTIAL COHERENCE EMULATOR</b><br>
+            <i>Model: AppOpt-2025</i>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * PHYSICS SIMULATION ENGINE
+         */
+        const SIZE = 32; // Matches 32x32 LED Matrix logic
+        const K_RAD = 16;
+        const K_SIZE = K_RAD * 2 + 1;
+
+        // State
+        const state = {
+            rho: 3.0,
+            speed: 0.15,
+            mode: 'gaussian', 
+            view: 1, 
+            source: 'auto', // 'auto' or 'emf'
+        };
+
+        // Buffers
+        let noiseA = new Float32Array(SIZE * SIZE);
+        let noiseB = new Float32Array(SIZE * SIZE);
+        // Special buffer for EMF
+        let emfNoise = new Float32Array(SIZE * SIZE);
+        
+        let kernel = new Float32Array(K_SIZE * K_SIZE);
+        let phaseScreen = new Float32Array(SIZE * SIZE);
+        
+        // FFT Buffers
+        let fftReal = new Float32Array(SIZE * SIZE);
+        let fftImag = new Float32Array(SIZE * SIZE);
+
+        let timeT = 0;
+        let emfTime = 0; // For scrolling the "mains hum"
+
+        // Interaction State
+        const mouse = { x: -1000, y: -1000 };
+
+        // Canvas
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const imgData = ctx.createImageData(SIZE, SIZE);
+        const data = imgData.data;
+
+        // --- MATH HELPERS ---
+
+        function initNoise() {
+            for(let i=0; i<SIZE*SIZE; i++) {
+                noiseA[i] = (Math.random() - 0.5) * 2 * Math.PI;
+                noiseB[i] = (Math.random() - 0.5) * 2 * Math.PI;
+            }
+        }
+
+        function getKernelValue(r, rho, mode) {
+            if (mode === 'gaussian') {
+                return Math.exp(-(r * r) / (rho * rho));
+            } else {
+                return 1.0 / (1.0 + Math.pow(r / rho, 1.5));
+            }
+        }
+
+        function updateKernel() {
+            let sum = 0;
+            const center = K_RAD;
+            for(let y=0; y<K_SIZE; y++) {
+                for(let x=0; x<K_SIZE; x++) {
+                    const dx = x - center;
+                    const dy = y - center;
+                    const r = Math.sqrt(dx*dx + dy*dy);
+                    const val = getKernelValue(r, state.rho, state.mode);
+                    kernel[y*K_SIZE + x] = val;
+                    sum += val;
+                }
+            }
+            for(let i=0; i<kernel.length; i++) kernel[i] /= sum;
+        }
+
+        // --- EMF LOGIC ---
+        function updateEMFBuffer() {
+            // Speed Knob now controls the hum scroll speed...
+            // Base speed 0.05, max added by knob 0.4
+            emfTime += 0.05 + (state.speed * 0.8);
+            
+            // Calculate distance of mouse to center (Simulating Hand Proximity to Antenna)
+            const cx = SIZE/2;
+            const cy = SIZE/2;
+            const dx = mouse.x - cx;
+            const dy = mouse.y - cy;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            
+            const proximity = Math.max(0, 1.0 - (dist / 20.0)); 
+            const signalStrength = 0.5 + (proximity * 8.0);
+
+            for (let y = 0; y < SIZE; y++) {
+                for (let x = 0; x < SIZE; x++) {
+                    const i = y * SIZE + x;
+                    
+                    // 1. Calculate the TARGET signal (This is the harsh random noise)
+                    const staticNoise = (Math.random() - 0.5) * 2.0;
+                    const hum = Math.sin((y * 0.5) + emfTime) * 0.5;
+                    const targetSignal = (staticNoise + hum) * signalStrength;
+
+                    // 2. TEMPORAL SMOOTHING (The fix!)
+                    // Instead of instantly jumping to the new target signal, we blend towards it.
+                    // If speed knob is low, blend is small -> smooth, slow changes (nice on eyes).
+                    // If speed knob is high, blend is large -> instant updates (harsh).
+                    
+                    // blend ranges from ~0.05 (very smooth) to ~0.45 (responsive)
+                    const blend = 0.05 + (state.speed * 0.8); 
+
+                    emfNoise[i] += (targetSignal - emfNoise[i]) * blend;
+                }
+            }
+        }
+
+        // --- FFT LOGIC (Beam) ---
+        function fft1D(real, imag, step, offset, n) {
+            if (n === 1) return;
+            fft1D(real, imag, step * 2, offset, n / 2);
+            fft1D(real, imag, step * 2, offset + step, n / 2);
+            for (let k = 0; k < n / 2; k++) {
+                const tReal = Math.cos(-2 * Math.PI * k / n);
+                const tImag = Math.sin(-2 * Math.PI * k / n);
+                const oddIdx = offset + step * (2 * k + 1);
+                const evenIdx = offset + step * (2 * k);
+                const oddR = real[oddIdx];
+                const oddI = imag[oddIdx];
+                const wOddR = tReal * oddR - tImag * oddI;
+                const wOddI = tReal * oddI + tImag * oddR;
+                const evenR = real[evenIdx];
+                const evenI = imag[evenIdx];
+                real[evenIdx] = evenR + wOddR;
+                imag[evenIdx] = evenI + wOddI;
+                real[oddIdx] = evenR - wOddR;
+                imag[oddIdx] = evenI - wOddI;
+            }
+        }
+
+        function computeFFT() {
+            for(let i=0; i<SIZE*SIZE; i++) {
+                fftReal[i] = Math.cos(phaseScreen[i]);
+                fftImag[i] = Math.sin(phaseScreen[i]);
+            }
+            let rowR = new Float32Array(SIZE), rowI = new Float32Array(SIZE);
+            for(let y=0; y<SIZE; y++) {
+                for(let x=0; x<SIZE; x++) { rowR[x] = fftReal[y*SIZE+x]; rowI[x] = fftImag[y*SIZE+x]; }
+                fft1D(rowR, rowI, 1, 0, SIZE);
+                for(let x=0; x<SIZE; x++) { fftReal[y*SIZE+x] = rowR[x]; fftImag[y*SIZE+x] = rowI[x]; }
+            }
+            let colR = new Float32Array(SIZE), colI = new Float32Array(SIZE);
+            for(let x=0; x<SIZE; x++) {
+                for(let y=0; y<SIZE; y++) { colR[y] = fftReal[y*SIZE+x]; colI[y] = fftImag[y*SIZE+x]; }
+                fft1D(colR, colI, 1, 0, SIZE);
+                for(let y=0; y<SIZE; y++) { fftReal[y*SIZE+x] = colR[y]; fftImag[y*SIZE+x] = colI[y]; }
+            }
+        }
+
+        // --- DRAWING ---
+        function setPixel(i, r, g, b) {
+            data[i*4] = r; data[i*4+1] = g; data[i*4+2] = b; data[i*4+3] = 255;
+        }
+
+        function hslToRgb(h, s, l) {
+            const c = (1 - Math.abs(2 * l - 1)) * s;
+            const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+            const m = l - c / 2;
+            let r=0, g=0, b=0;
+            if (0 <= h && h < 60) { r=c; g=x; b=0; }
+            else if (60 <= h && h < 120) { r=x; g=c; b=0; }
+            else if (120 <= h && h < 180) { r=0; g=c; b=x; }
+            else if (180 <= h && h < 240) { r=0; g=x; b=c; }
+            else if (240 <= h && h < 300) { r=x; g=0; b=c; }
+            else if (300 <= h && h < 360) { r=c; g=0; b=x; }
+            return [(r+m)*255, (g+m)*255, (b+m)*255];
+        }
+
+        function drawKernel() {
+            const center = K_RAD;
+            const maxVal = kernel[center*K_SIZE + center] || 1;
+            for(let y=0; y<SIZE; y++) {
+                for(let x=0; x<SIZE; x++) {
+                    const kx = (x - SIZE/2) + center;
+                    const ky = (y - SIZE/2) + center;
+                    let val = 0;
+                    if(kx >= 0 && kx < K_SIZE && ky >= 0 && ky < K_SIZE) {
+                        val = kernel[ky*K_SIZE + kx] / maxVal;
+                    }
+                    val = Math.pow(val, 0.45); // Gamma
+                    setPixel(y*SIZE+x, val*200, val*200, val*255); 
+                }
+            }
+        }
+
+        function drawPhase() {
+            for(let i=0; i<SIZE*SIZE; i++) {
+                const p = phaseScreen[i];
+                let h = ((p + Math.PI) / (2 * Math.PI)) * 360;
+                h = (h + performance.now() * 0.02) % 360; 
+                // In EMF mode, if signal is super noisy, it looks vibrant
+                const rgb = hslToRgb(h, 1.0, 0.5);
+                setPixel(i, rgb[0], rgb[1], rgb[2]);
+            }
+        }
+
+        function drawBeam() {
+            let maxMag = 0;
+            const mags = new Float32Array(SIZE*SIZE);
+            for(let y=0; y<SIZE; y++) {
+                for(let x=0; x<SIZE; x++) {
+                    const sy = (y + SIZE/2) % SIZE;
+                    const sx = (x + SIZE/2) % SIZE;
+                    const idx = sy*SIZE + sx;
+                    const mag = fftReal[idx]**2 + fftImag[idx]**2;
+                    mags[y*SIZE+x] = mag;
+                    if(mag > maxMag) maxMag = mag;
+                }
+            }
+            for(let i=0; i<SIZE*SIZE; i++) {
+                let val = Math.log10(1 + mags[i]) / Math.log10(1 + maxMag);
+                const h = val * 60;
+                setPixel(i, (val > 0.1 ? 255 : val*2550), val*255, val*200);
+            }
+        }
+
+        // --- MAIN LOOP ---
+        function tick() {
+            if (state.source === 'auto') {
+                // 1. Auto Physics Calc (Crossfade)
+                timeT += state.speed * 0.2;
+                if (timeT >= 1.0) {
+                    timeT = 0;
+                    let temp = noiseA; noiseA = noiseB; noiseB = temp;
+                    for(let i=0; i<noiseB.length; i++) noiseB[i] = (Math.random()-0.5)*2*Math.PI;
+                }
+            } else {
+                // 2. EMF Mode Logic (Simulated)
+                updateEMFBuffer();
+            }
+
+            // Convolution
+            const range = Math.min(K_RAD, Math.ceil(state.rho * 3.0));
+            for(let y=0; y<SIZE; y++) {
+                for(let x=0; x<SIZE; x++) {
+                    let rSum = 0, iSum = 0;
+                    for(let ky=-range; ky<=range; ky++) {
+                        for(let kx=-range; kx<=range; kx++) {
+                            let ny = (y + ky + SIZE) % SIZE;
+                            let nx = (x + kx + SIZE) % SIZE;
+                            const nIdx = ny*SIZE + nx;
+                            
+                            let noiseVal = 0;
+                            if (state.source === 'auto') {
+                                noiseVal = noiseA[nIdx]*(1-timeT) + noiseB[nIdx]*timeT;
+                            } else {
+                                noiseVal = emfNoise[nIdx];
+                            }
+                            
+                            const kVal = kernel[(ky+K_RAD)*K_SIZE + (kx+K_RAD)];
+                            rSum += Math.cos(noiseVal) * kVal;
+                            iSum += Math.sin(noiseVal) * kVal;
+                        }
+                    }
+                    phaseScreen[y*SIZE+x] = Math.atan2(iSum, rSum);
+                }
+            }
+
+            // Render
+            if (state.view === 0) {
+                drawKernel();
+            } else if (state.view === 1) {
+                drawPhase();
+            } else {
+                computeFFT();
+                drawBeam();
+            }
+
+            ctx.putImageData(imgData, 0, 0);
+            requestAnimationFrame(tick);
+        }
+
+
+        // --- NETWORK SYNC ---
+        let lastSend = 0;
+        function sendState() {
+            const now = performance.now();
+            if (now - lastSend < 50) return; // Throttle to 20fps
+            lastSend = now;
+
+            const payload = {
+                rho: (state.rho - 1.0) / 7.0, // Normalize back to 0-1 range roughly
+                speed: state.speed * 2.0,     // Normalize
+                joy_x: 0.5 + (mouse.x > 0 ? (mouse.x/SIZE - 0.5) : 0), // Rough mouse mapping to joy
+                joy_y: 0.5 + (mouse.y > 0 ? (mouse.y/SIZE - 0.5) : 0),
+                tap: 0.0,
+                mode: state.mode,
+                source: state.source,
+                view: state.view
+            };
+
+            fetch('/api/inputs', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            }).catch(e => console.warn('Sync failed', e));
+        }
+
+        // --- UI BINDING ---
+        function setupKnob(elementId, initialAngle, rangeMin, rangeMax, callback, steps) {
+            const knob = document.getElementById(elementId);
+            let isDragging = false;
+            let startY = 0;
+            let startAngle = initialAngle;
+            let currentAngle = initialAngle;
+            knob.style.transform = `rotate(${currentAngle}deg)`;
+            const update = (newAngle) => {
+                currentAngle = newAngle;
+                if (steps) {
+                    const totalRange = rangeMax - rangeMin;
+                    const stepSize = totalRange / (steps - 1);
+                    const rawVal = (currentAngle - rangeMin) / totalRange; 
+                    const stepIdx = Math.round(rawVal * (steps - 1));
+                    currentAngle = rangeMin + stepIdx * stepSize;
+                }
+                if (currentAngle < rangeMin) currentAngle = rangeMin;
+                if (currentAngle > rangeMax) currentAngle = rangeMax;
+                knob.style.transform = `rotate(${currentAngle}deg)`;
+                const norm = (currentAngle - rangeMin) / (rangeMax - rangeMin);
+                callback(norm);
+                sendState(); // Trigger sync
+            };
+
+            knob.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                startY = e.clientY;
+                startAngle = currentAngle;
+                document.body.style.cursor = 'ns-resize';
+            });
+            window.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                const deltaY = startY - e.clientY;
+                update(startAngle + deltaY * 2);
+            });
+            window.addEventListener('mouseup', () => {
+                isDragging = false;
+                document.body.style.cursor = 'default';
+            });
+            return update;
+        }
+
+        // Rho Knob
+        setupKnob('knob-rho', -90, -135, 135, (val) => {
+            state.rho = 1.0 + (val * 7.0);
+            updateKernel();
+        });
+
+        // Speed Knob
+        setupKnob('knob-speed', 0, -135, 135, (val) => {
+            state.speed = val * 0.5;
+        });
+
+        // View Knob (3 Steps)
+        setupKnob('knob-view', 0, -60, 60, (val) => {
+            if (val < 0.25) state.view = 0;
+            else if (val > 0.75) state.view = 2;
+            else state.view = 1;
+        }, 3);
+
+        // Mode Switch
+        const switchEl = document.getElementById('switch-mode');
+        const ledEl = document.getElementById('led-mode');
+        switchEl.addEventListener('click', () => {
+            if (state.mode === 'gaussian') {
+                state.mode = 'rational';
+                switchEl.classList.add('active');
+                ledEl.classList.add('rational');
+            } else {
+                state.mode = 'gaussian';
+                switchEl.classList.remove('active');
+                ledEl.classList.remove('rational');
+            }
+            updateKernel();
+            sendState();
+        });
+        
+        // Source Switch (EMF)
+        const switchSrc = document.getElementById('switch-source');
+        const ledSrc = document.getElementById('led-source');
+        
+        switchSrc.addEventListener('click', () => {
+            if (state.source === 'auto') {
+                state.source = 'emf';
+                switchSrc.classList.add('active');
+                ledSrc.classList.remove('off');
+            } else {
+                state.source = 'auto';
+                switchSrc.classList.remove('active');
+                ledSrc.classList.add('off');
+            }
+            sendState();
+        });
+
+        // Mouse Listeners for EMF Proximity
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            // Map mouse to Grid Space (0-32)
+            mouse.x = (e.clientX - rect.left) / rect.width * SIZE;
+            mouse.y = (e.clientY - rect.top) / rect.height * SIZE;
+        });
+        canvas.addEventListener('mouseleave', () => {
+             mouse.x = -1000;
+             mouse.y = -1000;
+        });
+
+        // Init
+        initNoise();
+        updateKernel();
+        tick();
+
+    </script>
+</body>
+</html>
