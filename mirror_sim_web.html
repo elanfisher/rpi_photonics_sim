@@ -29,14 +29,37 @@
     max-width: 100%;
   }
   .screen { display: flex; background: #000; border-radius: 4px; overflow: hidden; }
+  .stage { position: relative; }
   canvas { display: block; image-rendering: pixelated; background: #000; }
+  #mini {
+    position: absolute; right: 8px; bottom: 8px;
+    width: 172px; height: 138px;
+    image-rendering: auto;
+    background: rgba(10,10,16,.72);
+    border: 1px solid var(--line); border-radius: 4px;
+    cursor: grab;
+  }
+  #mini.hidden { display: none; }
+  #mini:active { cursor: grabbing; }
   .sidebar {
     width: 132px; flex: 0 0 132px;
     background: #14141e; border-left: 1px solid var(--line);
     padding: 8px 8px 6px; font-size: 11px;
   }
-  .row { padding: 3px 4px; border-radius: 3px; cursor: pointer; }
+  .row {
+    padding: 3px 4px; border-radius: 3px; cursor: pointer;
+    display: flex; align-items: baseline; gap: 5px;
+  }
   .row.sel { background: #2f3d52; }
+  .row .v { flex: 1; }
+  .row .pm { opacity: 0; display: flex; gap: 2px; }
+  .row:hover .pm, .row.sel .pm { opacity: 1; }
+  .row .pm b {
+    display: inline-block; width: 15px; text-align: center;
+    background: #333; border: 1px solid var(--line); border-radius: 3px;
+    color: var(--ink); font-weight: 400; cursor: pointer; line-height: 15px;
+  }
+  .row .pm b:hover { background: #4a4a4a; }
   .row .k { color: var(--dim); }
   .row .v { color: var(--accent); }
   .viewname {
@@ -65,7 +88,10 @@
 
 <div class="device">
   <div class="screen">
-    <canvas id="sim" width="480" height="480"></canvas>
+    <div class="stage">
+      <canvas id="sim" width="480" height="480"></canvas>
+      <canvas id="mini" width="344" height="276"></canvas>
+    </div>
     <div class="sidebar">
       <div id="menu"></div>
       <div class="viewname">
@@ -84,8 +110,9 @@
 
 <p class="hint">
   Drag on the screen to move the beam, the way the left joystick does on the device.
-  <kbd>&larr;</kbd><kbd>&rarr;</kbd> cycles views, <kbd>&uarr;</kbd><kbd>&darr;</kbd> picks a menu row,
-  <kbd>,</kbd><kbd>.</kbd> changes its value.
+  <kbd>&uarr;</kbd><kbd>&darr;</kbd> picks a menu row and <kbd>&larr;</kbd><kbd>&rarr;</kbd> changes
+  its value, which is what the right joystick does. <kbd>V</kbd> cycles views.
+  Drag the minimap to turn the mirror, double click it to stop the spin.
 </p>
 
 <script>
@@ -109,7 +136,7 @@ const params = {
   z_m: 0.15, R_m: 0.5, roughness_idx: 3, corr_len: 150e-6,
   beam_x: 0.5e-3, beam_y: 0.3e-3,
   mirror_mode: "quadratic", qp_mode: "statistical",
-  markers: true, fidelity: 2,
+  markers: true, fidelity: 2, show3d: true,
 };
 const DEFAULTS = JSON.parse(JSON.stringify(params));
 
@@ -385,6 +412,124 @@ function render() {
   }
 }
 
+// ---------------------------------------------------------------- 3d minimap
+// The mirror surface is a heightfield, so it needs no 3D library. Downsample it,
+// rotate the vertices, sort the quads back to front and fill them. Flat shading
+// comes from the quad normal against a fixed light.
+const mini = document.getElementById("mini");
+const mctx = mini.getContext("2d");
+const MW = mini.width, MH = mini.height;
+const M = 44;               // minimap grid, independent of the physics grid
+let yaw = -0.6, pitch = 1.02, spin = true;
+
+function draw3D() {
+  if (!params.show3d || !state.h) return;
+  const N = state.N, h = state.h;
+
+  // Height is renormalised to its own range. Curvature is microns and roughness
+  // is tens of nanometres, so a shared absolute scale would flatten one of them
+  // to nothing.
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < N*N; i++) { if (h[i] < lo) lo = h[i]; if (h[i] > hi) hi = h[i]; }
+  const span = (hi - lo) > 1e-30 ? (hi - lo) : 1;
+
+  const z = new Float64Array(M*M);
+  for (let j = 0; j < M; j++) {
+    const sy = Math.min(N-1, Math.floor(j*N/M));
+    for (let i = 0; i < M; i++) {
+      const sx = Math.min(N-1, Math.floor(i*N/M));
+      z[j*M+i] = (h[sy*N+sx] - lo)/span - 0.5;
+    }
+  }
+
+  const cy = Math.cos(yaw), sy_ = Math.sin(yaw);
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const DEPTH = 0.42, SCALE = MW * 0.62, CX = MW/2, CY = MH*0.56;
+
+  const px = new Float64Array(M*M), py = new Float64Array(M*M), pz = new Float64Array(M*M);
+  for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) {
+    const k = j*M+i;
+    const wx = i/(M-1) - 0.5, wy = j/(M-1) - 0.5, wz = z[k]*DEPTH;
+    const rx = wx*cy - wy*sy_;
+    const ry = wx*sy_ + wy*cy;
+    const vy = ry*cp - wz*sp;
+    const vz = ry*sp + wz*cp;
+    const persp = 1 / (1 + vz*0.35);
+    px[k] = CX + rx*SCALE*persp;
+    py[k] = CY + vy*SCALE*persp;
+    pz[k] = vz;
+  }
+
+  const quads = [];
+  for (let j = 0; j < M-1; j++) for (let i = 0; i < M-1; i++) {
+    const a = j*M+i, b = a+1, c = a+M+1, d = a+M;
+    quads.push([a, b, c, d, (pz[a]+pz[b]+pz[c]+pz[d])*0.25]);
+  }
+  quads.sort((p, q) => q[4] - p[4]);   // far first
+
+  const cm = CMAPS.viridis;
+  const LX = -0.45, LY = -0.6, LZ = 0.66;
+  const dxw = 1/(M-1);
+
+  mctx.clearRect(0, 0, MW, MH);
+  for (const [a, b, c, d] of quads) {
+    // Normal from the height gradient across the quad, in unrotated world space.
+    const ia = a % M, ja = (a - ia)/M;
+    const gx = (z[ja*M + Math.min(M-1, ia+1)] - z[ja*M+ia]) * DEPTH / dxw;
+    const gy = (z[Math.min(M-1, ja+1)*M + ia] - z[ja*M+ia]) * DEPTH / dxw;
+    let nx = -gx, ny = -gy, nz = 1;
+    const nl = Math.hypot(nx, ny, nz); nx/=nl; ny/=nl; nz/=nl;
+    const lam = Math.max(0.18, nx*LX + ny*LY + nz*LZ);
+
+    const t = z[ja*M+ia] + 0.5;
+    let ci = (t*255)|0; if (ci < 0) ci = 0; else if (ci > 255) ci = 255;
+    const r = cm[ci*3]*lam, g = cm[ci*3+1]*lam, bl = cm[ci*3+2]*lam;
+
+    mctx.beginPath();
+    mctx.moveTo(px[a], py[a]);
+    mctx.lineTo(px[b], py[b]);
+    mctx.lineTo(px[c], py[c]);
+    mctx.lineTo(px[d], py[d]);
+    mctx.closePath();
+    mctx.fillStyle = `rgb(${r|0},${g|0},${bl|0})`;
+    mctx.fill();
+    mctx.strokeStyle = mctx.fillStyle;
+    mctx.lineWidth = 0.5;
+    mctx.stroke();   // hides seams between adjacent fills
+  }
+
+  mctx.fillStyle = "rgba(232,232,239,.75)";
+  mctx.font = "20px ui-monospace, Menlo, monospace";
+  mctx.fillText("mirror surface", 10, 24);
+}
+
+function syncMini() {
+  mini.classList.toggle("hidden", !params.show3d);
+}
+
+// The minimap animates on its own so spinning never re-runs the physics.
+let lastT = 0;
+function spinLoop(t) {
+  if (params.show3d) {
+    if (spin && !miniDrag) yaw += (t - lastT) * 0.00018;
+    draw3D();
+  }
+  lastT = t;
+  requestAnimationFrame(spinLoop);
+}
+
+let miniDrag = null;
+mini.addEventListener("mousedown", e => {
+  miniDrag = { x: e.clientX, y: e.clientY, yaw, pitch }; spin = false; e.stopPropagation();
+});
+window.addEventListener("mousemove", e => {
+  if (!miniDrag) return;
+  yaw = miniDrag.yaw + (e.clientX - miniDrag.x) * 0.01;
+  pitch = Math.min(1.5, Math.max(0.15, miniDrag.pitch + (e.clientY - miniDrag.y) * 0.008));
+});
+window.addEventListener("mouseup", () => { miniDrag = null; });
+mini.addEventListener("dblclick", () => { spin = !spin; });
+
 // ---------------------------------------------------------------- menu
 const MENU = [
   { label: "Fidelity", get: () => FIDELITY_LEVELS[params.fidelity][0],
@@ -405,12 +550,16 @@ const MENU = [
     adj: d => { let u = params.corr_len*1e6 + d*10; params.corr_len = Math.min(500, Math.max(10, u))*1e-6; } },
   { label: "Mark", get: () => params.markers ? "on" : "off",
     adj: () => { params.markers = !params.markers; } },
+  { label: "3D", get: () => params.show3d ? "on" : "off",
+    adj: () => { params.show3d = !params.show3d; syncMini(); } },
 ];
 
 function drawMenu() {
   document.getElementById("menu").innerHTML = MENU.map((m, i) =>
     `<div class="row${i===selected?" sel":""}" data-i="${i}">` +
-    `<span class="k">${m.label}</span> <span class="v">${m.get()}</span></div>`).join("");
+    `<span class="k">${m.label}</span> <span class="v">${m.get()}</span>` +
+    `<span class="pm"><b data-i="${i}" data-d="-1">&minus;</b><b data-i="${i}" data-d="1">+</b></span>` +
+    `</div>`).join("");
   document.getElementById("viewname").textContent = VIEW_NAMES[view];
   document.getElementById("viewnum").textContent = (view+1) + "/6";
   const N = FIDELITY_LEVELS[params.fidelity][1];
@@ -449,26 +598,33 @@ cv.addEventListener("touchend", () => { dragging = false; });
 function cycleView(d) { view = (view + d + VIEW_NAMES.length) % VIEW_NAMES.length; dirty = true; }
 document.getElementById("nextview").onclick = () => cycleView(1);
 document.getElementById("prevview").onclick = () => cycleView(-1);
-document.getElementById("reset").onclick = () => { Object.assign(params, JSON.parse(JSON.stringify(DEFAULTS))); dirty = true; };
+document.getElementById("reset").onclick = () => {
+  Object.assign(params, JSON.parse(JSON.stringify(DEFAULTS))); syncMini(); dirty = true;
+};
 document.getElementById("menu").addEventListener("click", e => {
+  const pm = e.target.closest(".pm b");
+  if (pm) { selected = +pm.dataset.i; MENU[selected].adj(+pm.dataset.d); dirty = true; return; }
   const row = e.target.closest(".row"); if (!row) return;
   selected = +row.dataset.i; dirty = true;
 });
 
+// Up and down pick a row, left and right change its value. That is what the
+// right joystick does on the device.
 window.addEventListener("keydown", e => {
   const k = e.key;
-  if (k === "ArrowRight") cycleView(1);
-  else if (k === "ArrowLeft") cycleView(-1);
-  else if (k === "ArrowDown") { selected = (selected+1)%MENU.length; dirty = true; }
+  if (k === "ArrowDown") { selected = (selected+1)%MENU.length; dirty = true; }
   else if (k === "ArrowUp") { selected = (selected-1+MENU.length)%MENU.length; dirty = true; }
-  else if (k === "." || k === ">") { MENU[selected].adj(1); dirty = true; }
-  else if (k === "," || k === "<") { MENU[selected].adj(-1); dirty = true; }
+  else if (k === "ArrowRight" || k === "." || k === ">") { MENU[selected].adj(1); dirty = true; }
+  else if (k === "ArrowLeft" || k === "," || k === "<") { MENU[selected].adj(-1); dirty = true; }
+  else if (k === "v" || k === "V" || k === " ") cycleView(1);
   else return;
   e.preventDefault();
 });
 
+syncMini();
 recompute();
 tick();
+requestAnimationFrame(spinLoop);
 </script>
 </body>
 </html>
