@@ -77,6 +77,8 @@
   button:hover { background: #3d3d3d; }
   button:active { background: #4a4a4a; }
   .hint { color: var(--dim); max-width: 640px; text-align: center; font-size: 12px; }
+  .camlabel { color: var(--dim); align-self: center; font-size: 12px; margin-left: 6px; }
+  button.cam { padding: 6px 9px; font-size: 11px; }
   .hint kbd {
     background: #333; border: 1px solid var(--line); border-radius: 3px;
     padding: 1px 5px; font: inherit; font-size: 11px;
@@ -104,6 +106,11 @@
     <button id="prevview">&larr; view</button>
     <button id="nextview">view &rarr;</button>
     <button id="reset">reset</button>
+    <span class="camlabel">mirror:</span>
+    <button class="cam" data-c="top">top</button>
+    <button class="cam" data-c="into">into</button>
+    <button class="cam" data-c="side">side</button>
+    <button class="cam" data-c="under">under</button>
     <span class="stat" id="stat"></span>
   </div>
 </div>
@@ -423,8 +430,19 @@ const M = 44;               // minimap grid, independent of the physics grid
 // pitch is the angle off vertical. 0 looks straight down into the dish, +PI/2 is
 // edge on from above the rim, negative swings under the surface to see the back
 // of it. The camera orbits freely rather than sitting on one side of the horizon.
-let yaw = -0.6, pitch = 0.78, spin = true;
+let yaw = -0.6, pitch = 0.45, spin = true;
 const PITCH_MIN = -1.45, PITCH_MAX = 1.45;
+
+// A bowl of depth DEPTH across a unit-wide patch hides its own interior once the
+// near rim rises above the centre on screen, which happens at
+// tan(pitch) > 1/(2*DEPTH). At DEPTH 0.42 that is 0.87 rad, so anything steeper
+// than that is looking at the outside of the rim. The presets below bracket it.
+const CAM_PRESETS = {
+  top:   [-0.6, 0.06],
+  into:  [-0.6, 0.45],
+  side:  [-0.6, 1.25],
+  under: [-0.6, -0.75],
+};
 
 function draw3D() {
   if (!params.show3d || !state.h) return;
@@ -497,9 +515,11 @@ function draw3D() {
     mctx.closePath();
     mctx.fillStyle = `rgb(${r|0},${g|0},${bl|0})`;
     mctx.fill();
-    mctx.strokeStyle = mctx.fillStyle;
-    mctx.lineWidth = 0.5;
-    mctx.stroke();   // hides seams between adjacent fills
+    // A visible mesh line rather than a seam-hiding one. On a smooth surface the
+    // grid is the strongest cue for which way the curvature goes.
+    mctx.strokeStyle = `rgba(255,255,255,.13)`;
+    mctx.lineWidth = 0.6;
+    mctx.stroke();
   }
 
   mctx.fillStyle = "rgba(232,232,239,.75)";
@@ -533,6 +553,15 @@ window.addEventListener("mousemove", e => {
 });
 window.addEventListener("mouseup", () => { miniDrag = null; });
 mini.addEventListener("dblclick", () => { spin = !spin; });
+
+document.querySelectorAll("button.cam").forEach(b => {
+  b.onclick = () => {
+    const [y, p] = CAM_PRESETS[b.dataset.c];
+    yaw = y; pitch = p; spin = false;
+    if (!params.show3d) { params.show3d = true; syncMini(); drawMenu(); }
+    draw3D();
+  };
+});
 
 // ---------------------------------------------------------------- menu
 const MENU = [
